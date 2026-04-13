@@ -1,0 +1,22 @@
+services:
+  fuel-tracker:
+    build: .
+    container_name: fuel-tracker
+    restart: unless-stopped
+    ports:
+      - "5010:5000"
+    volumes:
+      - /mnt/user/appdata/fuel-tracker:/data
+    environment:
+      - FUELCHECK_API_KEY=YOUR_API_KEY_HERE
+      - FUELCHECK_API_SECRET=YOUR_API_SECRET_HERE
+      - NTFY_290=https://ntfy.sh/fuel-290
+      - NTFY_300=https://ntfy.sh/fuel-300
+      - NTFY_315=https://ntfy.sh/fuel-315
+      - NTFY_URL=
+      - ALERT_THRESHOLD=305.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3

@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Newcastle Fuel Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f0; color: #1a1a1a; font-size: 15px; line-height: 1.5; }
+    header { background: #1a1a1a; color: #fff; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 18px; font-weight: 500; }
+    header span { font-size: 12px; color: #aaa; }
+    .container { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+    .summary-card { background: #fff; border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid #e8e8e4; }
+    .summary-card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .summary-card .value { font-size: 24px; font-weight: 600; color: #1a1a1a; }
+    .summary-card .sub { font-size: 11px; color: #888; margin-top: 2px; }
+    .summary-card.crude { border-color: #b8860b; background: #fffdf0; }
+    .summary-card.crude .value { color: #7a5c00; }
+    .chart-card { background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 1.25rem; margin-bottom: 1.5rem; }
+    .chart-card h2 { font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
+    .chart-wrap { position: relative; height: 220px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 0.75rem 1.25rem; margin-bottom: 0.5rem; }
+    .section-header h2 { font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .section-header .chevron { font-size: 12px; color: #aaa; transition: transform 0.2s; }
+    .section-header.open .chevron { transform: rotate(180deg); }
+    .collapsible { overflow: hidden; transition: max-height 0.25s ease; }
+    .collapsible.collapsed { max-height: 0 !important; }
+    .pill-group { display: flex; gap: 6px; flex-wrap: wrap; padding: 0.75rem 0 0.25rem; }
+    .pill { font-size: 12px; padding: 4px 12px; border-radius: 99px; border: 1px solid #d0d0cc; background: #fff; color: #555; cursor: pointer; }
+    .pill.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 0.75rem 0 1rem; align-items: center; }
+    select { font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; cursor: pointer; }
+    .btn { font-size: 13px; padding: 6px 14px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; color: #1a1a1a; cursor: pointer; font-weight: 500; }
+    .btn.primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .settings-card { background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 1.25rem; margin-bottom: 1.5rem; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+    .settings-card h2 { font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
+    .settings-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+    .settings-row label { font-size: 13px; min-width: 140px; color: #555; }
+    .settings-row input { font-size: 14px; padding: 5px 10px; border-radius: 8px; border: 1px solid #d0d0cc; width: 90px; }
+    .settings-row span { font-size: 12px; color: #888; }
+    .save-msg { font-size: 12px; color: #1a7a4a; margin-left: 10px; display: none; }
+    .station { background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .station.best { border-color: #22a06b; border-width: 1.5px; }
+    .station-info .name { font-size: 14px; font-weight: 500; }
+    .station-info .addr { font-size: 11px; color: #888; margin-top: 2px; }
+    .chips { display: flex; gap: 8px; flex-shrink: 0; }
+    .chip { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 99px; }
+    .chip.dl { background: #e8f0fe; color: #1a5cb5; }
+    .chip.pdl { background: #e6f9f1; color: #1a7a4a; }
+    .chip.best-price { outline: 2px solid #22a06b; outline-offset: 1px; }
+    .suburb-header { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.07em; padding: 1rem 0 4px; border-bottom: 1px solid #e8e8e4; margin-bottom: 4px; }
+    .empty { color: #888; font-size: 13px; padding: 1rem 0; }
+    .footer { font-size: 11px; color: #aaa; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e8e8e4; }
+    @media (max-width: 600px) {
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .controls { gap: 6px; }
+      .btn { font-size: 12px; padding: 5px 10px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Newcastle Fuel Tracker</h1>
+  <span id="last-updated">Loading...</span>
+</header>
+<div class="container">
+
+  <div class="summary">
+    <div class="summary-card"><div class="label">Cheapest diesel</div><div class="value" id="sum-dl">—</div><div class="sub" id="sum-dl-sub"></div></div>
+    <div class="summary-card"><div class="label">Cheapest prem. diesel</div><div class="value" id="sum-pdl">—</div><div class="sub" id="sum-pdl-sub"></div></div>
+    <div class="summary-card"><div class="label">Stations tracked</div><div class="value" id="sum-stations">—</div><div class="sub" id="sum-stations-sub"></div></div>
+    <div class="summary-card crude"><div class="label">Brent crude</div><div class="value" id="crude-val">—</div><div class="sub" id="crude-sub"></div></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Price history — last 30 days</h2>
+    <div class="chart-wrap"><canvas id="history-chart"></canvas></div>
+  </div>
+
+  <div class="section-header open" id="suburb-header" onclick="toggleSuburbs()">
+    <h2>Suburbs <span id="suburb-count"></span></h2>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="collapsible" id="suburb-collapsible">
+    <div class="pill-group" id="suburb-pills"></div>
+    <div class="controls" style="padding-bottom:0.5rem;">
+      <button class="btn" onclick="selectAll()">Select all</button>
+      <button class="btn" onclick="selectNone()">Select none</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <select id="sort-select" onchange="render()">
+      <option value="price">Price (lowest first)</option>
+      <option value="suburb">Suburb</option>
+      <option value="name">Station name</option>
+    </select>
+    <button class="btn primary" id="btn-DL" onclick="toggleFuel('DL')">Diesel</button>
+    <button class="btn primary" id="btn-PDL" onclick="toggleFuel('PDL')">Prem. Diesel</button>
+    <button class="btn primary" onclick="manualFetch()">Fetch now</button>
+  </div>
+
+  <div id="station-list"></div>
+
+  <div class="section-header" id="settings-header" onclick="toggleSettings()">
+    <h2>Notification thresholds</h2>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="collapsible collapsed" id="settings-collapsible">
+    <div class="settings-card">
+      <div class="settings-row">
+        <label>fuel-290 alert at or below</label>
+        <input type="number" id="t290" value="290" min="200" max="400" step="0.5">
+        <span>c/L</span>
+      </div>
+      <div class="settings-row">
+        <label>fuel-300 alert at or below</label>
+        <input type="number" id="t300" value="300" min="200" max="400" step="0.5">
+        <span>c/L</span>
+      </div>
+      <div class="settings-row">
+        <label>fuel-315 alert at or below</label>
+        <input type="number" id="t315" value="315" min="200" max="400" step="0.5">
+        <span>c/L</span>
+      </div>
+      <button class="btn primary" onclick="saveSettings()">Save thresholds</button>
+      <span class="save-msg" id="save-msg">Saved!</span>
+    </div>
+  </div>
+
+  <div class="footer" id="footer"></div>
+</div>
+
+<script>
+  const DEFAULT_SUBURBS = ["Adamstown","Belmont","Charlestown","Hamilton","Hamilton South","Islington","Lambton","Mayfield","Mayfield West","Merewether","New Lambton","Newcastle","Newcastle West","Wallsend","Warners Bay","Wickham"];
+  let activeSuburbs = new Set(DEFAULT_SUBURBS.map(s => s.toLowerCase()));
+  let activeFuels = new Set(["DL","PDL"]);
+  let allData = [];
+  let historyChart = null;
+  let suburbsOpen = true;
+  let settingsOpen = false;
+
+  function toggleSuburbs() {
+    suburbsOpen = !suburbsOpen;
+    const el = document.getElementById("suburb-collapsible");
+    const hdr = document.getElementById("suburb-header");
+    if (suburbsOpen) {
+      el.classList.remove("collapsed");
+      el.style.maxHeight = el.scrollHeight + "px";
+      hdr.classList.add("open");
+    } else {
+      el.style.maxHeight = "0px";
+      el.classList.add("collapsed");
+      hdr.classList.remove("open");
+    }
+  }
+
+  function toggleSettings() {
+    settingsOpen = !settingsOpen;
+    const el = document.getElementById("settings-collapsible");
+    const hdr = document.getElementById("settings-header");
+    if (settingsOpen) {
+      el.classList.remove("collapsed");
+      el.style.maxHeight = el.scrollHeight + 200 + "px";
+      hdr.classList.add("open");
+    } else {
+      el.style.maxHeight = "0px";
+      el.classList.add("collapsed");
+      hdr.classList.remove("open");
+    }
+  }
+
+  function updateFuelButtons() {
+    ["DL","PDL"].forEach(f => {
+      const btn = document.getElementById("btn-" + f);
+      if (btn) btn.className = "btn" + (activeFuels.has(f) ? " primary" : "");
+    });
+  }
+
+  function toggleFuel(f) {
+    if (activeFuels.has(f)) {
+      if (activeFuels.size > 1) activeFuels.delete(f);
+    } else {
+      activeFuels.add(f);
+    }
+    updateFuelButtons();
+    render();
+  }
+
+  function buildSuburbPills(data) {
+    const pillGroup = document.getElementById("suburb-pills");
+    pillGroup.innerHTML = "";
+    const suburbs = [...new Set(data.map(s => s.suburb))].sort();
+    suburbs.forEach(s => {
+      const key = s.toLowerCase();
+      const p = document.createElement("button");
+      p.className = "pill" + (activeSuburbs.has(key) ? " active" : "");
+      p.textContent = s;
+      p.onclick = () => {
+        if (activeSuburbs.has(key)) {
+          if (activeSuburbs.size > 1) { activeSuburbs.delete(key); p.classList.remove("active"); }
+        } else {
+          activeSuburbs.add(key); p.classList.add("active");
+        }
+        updateSuburbCount();
+        render();
+      };
+      pillGroup.appendChild(p);
+    });
+    const el = document.getElementById("suburb-collapsible");
+    el.style.maxHeight = el.scrollHeight + "px";
+    updateSuburbCount();
+  }
+
+  function updateSuburbCount() {
+    document.getElementById("suburb-count").textContent = "(" + activeSuburbs.size + " selected)";
+  }
+
+  function selectAll() {
+    document.querySelectorAll(".pill").forEach(p => { activeSuburbs.add(p.textContent.toLowerCase()); p.classList.add("active"); });
+    updateSuburbCount();
+    render();
+  }
+
+  function selectNone() {
+    document.querySelectorAll(".pill").forEach(p => { activeSuburbs.delete(p.textContent.toLowerCase()); p.classList.remove("active"); });
+    const first = document.querySelector(".pill");
+    if (first) { activeSuburbs.add(first.textContent.toLowerCase()); first.classList.add("active"); }
+    updateSuburbCount();
+    render();
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await fetch("/api/settings");
+      const d = await r.json();
+      if (d.threshold_290) document.getElementById("t290").value = d.threshold_290;
+      if (d.threshold_300) document.getElementById("t300").value = d.threshold_300;
+      if (d.threshold_315) document.getElementById("t315").value = d.threshold_315;
+    } catch(e) {}
+  }
+
+  async function saveSettings() {
+    const data = {
+      threshold_290: document.getElementById("t290").value,
+      threshold_300: document.getElementById("t300").value,
+      threshold_315: document.getElementById("t315").value,
+    };
+    try {
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+      });
+      const msg = document.getElementById("save-msg");
+      msg.style.display = "inline";
+      setTimeout(() => { msg.style.display = "none"; }, 3000);
+    } catch(e) {}
+  }
+
+  async function loadPrices() {
+    try {
+      const r = await fetch("/api/prices/latest");
+      allData = await r.json();
+      buildSuburbPills(allData);
+      render();
+    } catch(e) {
+      document.getElementById("station-list").innerHTML = '<div class="empty">Could not load prices.</div>';
+    }
+  }
+
+  async function loadCrude() {
+    try {
+      const r = await fetch("/api/crude/latest");
+      const d = await r.json();
+      if (d) {
+        document.getElementById("crude-val").textContent = "USD $" + d.brent_usd.toFixed(2);
+        document.getElementById("crude-sub").textContent = (d.brent_aud ? "AUD $" + d.brent_aud.toFixed(2) + " · " : "") + d.date;
+      }
+    } catch(e) {}
+  }
+
+  async function loadHistory() {
+    try {
+      const [fuelResp, crudeResp] = await Promise.all([
+        fetch("/api/prices/history"),
+        fetch("/api/crude/history")
+      ]);
+      const fuelHistory = await fuelResp.json();
+      const crudeHistory = await crudeResp.json();
+      const dlByDate = {}, pdlByDate = {}, crudeByDate = {};
+      fuelHistory.forEach(r => {
+        if (r.fuel_type === "DL") dlByDate[r.date] = r.min_price;
+        if (r.fuel_type === "PDL") pdlByDate[r.date] = r.min_price;
+      });
+      crudeHistory.forEach(r => { crudeByDate[r.date] = r.brent_aud; });
+      const allDates = [...new Set([...Object.keys(dlByDate),...Object.keys(pdlByDate),...Object.keys(crudeByDate)])].sort();
+      if (allDates.length === 0) return;
+      const labels = allDates.map(d => new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}));
+      const ctx = document.getElementById("history-chart").getContext("2d");
+      if (historyChart) historyChart.destroy();
+      historyChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "Diesel (c/L)", data: allDates.map(d => dlByDate[d] || null), borderColor: "#1a5cb5", backgroundColor: "rgba(26,92,181,0.08)", tension: 0.3, pointRadius: 3, yAxisID: "y", spanGaps: true },
+            { label: "Prem. Diesel (c/L)", data: allDates.map(d => pdlByDate[d] || null), borderColor: "#1a7a4a", backgroundColor: "rgba(26,122,74,0.08)", tension: 0.3, pointRadius: 3, yAxisID: "y", spanGaps: true },
+            { label: "Brent Crude (AUD$/bbl)", data: allDates.map(d => crudeByDate[d] || null), borderColor: "#b8860b", backgroundColor: "rgba(184,134,11,0.08)", tension: 0.3, pointRadius: 3, yAxisID: "y2", spanGaps: true, borderDash: [4,3] }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top", labels: { font: { size: 11 }, boxWidth: 20 } },
+            tooltip: { callbacks: { label: ctx => { const v = ctx.parsed.y; if (v === null) return null; return ctx.dataset.label + ": " + (ctx.datasetIndex < 2 ? v.toFixed(1) + "c" : "$" + v.toFixed(2)); }}}
+          },
+          scales: {
+            x: { ticks: { font: { size: 10 }, maxRotation: 45 }, grid: { display: false } },
+            y: { position: "left", title: { display: true, text: "Cents/litre", font: { size: 10 } }, ticks: { font: { size: 10 } }, grid: { color: "rgba(0,0,0,0.05)" } },
+            y2: { position: "right", title: { display: true, text: "AUD$/barrel", font: { size: 10 } }, ticks: { font: { size: 10 } }, grid: { display: false } }
+          }
+        }
+      });
+    } catch(e) { console.error("Chart error:", e); }
+  }
+
+  async function manualFetch() {
+    document.getElementById("station-list").innerHTML = '<div class="empty">Fetching live prices...</div>';
+    await fetch("/api/fetch", { method: "POST" });
+    await loadPrices();
+    await loadCrude();
+    await loadHistory();
+  }
+
+  function render() {
+    const sort = document.getElementById("sort-select").value;
+    let data = allData.filter(s => activeSuburbs.has(s.suburb.toLowerCase()) && activeFuels.has(s.fuel_type));
+    const dlPrices = data.filter(s => s.fuel_type === "DL").map(s => s.price);
+    const pdlPrices = data.filter(s => s.fuel_type === "PDL").map(s => s.price);
+    const minDL = dlPrices.length ? Math.min(...dlPrices) : null;
+    const minPDL = pdlPrices.length ? Math.min(...pdlPrices) : null;
+    const avgDL = dlPrices.length ? (dlPrices.reduce((a,b)=>a+b,0)/dlPrices.length).toFixed(1) : null;
+    const avgPDL = pdlPrices.length ? (pdlPrices.reduce((a,b)=>a+b,0)/pdlPrices.length).toFixed(1) : null;
+    if (minDL) { document.getElementById("sum-dl").textContent = minDL.toFixed(1) + "c"; document.getElementById("sum-dl-sub").textContent = "avg " + avgDL + "c · " + dlPrices.length + " stations"; }
+    if (minPDL) { document.getElementById("sum-pdl").textContent = minPDL.toFixed(1) + "c"; document.getElementById("sum-pdl-sub").textContent = "avg " + avgPDL + "c · " + pdlPrices.length + " stations"; }
+    document.getElementById("sum-stations").textContent = new Set(data.map(s=>s.station)).size;
+    document.getElementById("sum-stations-sub").textContent = "across " + activeSuburbs.size + " suburbs";
+    if (sort === "price") data.sort((a,b) => a.price - b.price);
+    else if (sort === "suburb") data.sort((a,b) => a.suburb.localeCompare(b.suburb) || a.price - b.price);
+    else data.sort((a,b) => a.station.localeCompare(b.station));
+    if (!data.length) { document.getElementById("station-list").innerHTML = '<div class="empty">No stations match current filters.</div>'; return; }
+    let html = "";
+    if (sort === "suburb") {
+      const byS = {};
+      data.forEach(s => { if (!byS[s.suburb]) byS[s.suburb] = []; byS[s.suburb].push(s); });
+      Object.entries(byS).forEach(([sub, rows]) => {
+        html += '<div class="suburb-header">' + sub + '</div>';
+        rows.forEach(s => html += stationCard(s, minDL, minPDL));
+      });
+    } else {
+      data.forEach(s => html += stationCard(s, minDL, minPDL));
+    }
+    if (allData.length) {
+      const ts = allData[0].fetched_at;
+      const dt = new Date(ts).toLocaleString("en-AU");
+      document.getElementById("last-updated").textContent = "Updated " + dt;
+      document.getElementById("footer").textContent = "Data from NSW FuelCheck API · Brent crude via Yahoo Finance · Fetched " + dt + " · Scheduled 7am & 5pm daily";
+    }
+    document.getElementById("station-list").innerHTML = html;
+  }
+
+  function stationCard(s, minDL, minPDL) {
+    const isBest = (s.fuel_type === "DL" && s.price === minDL) || (s.fuel_type === "PDL" && s.price === minPDL);
+    const chipClass = s.fuel_type === "DL" ? "dl" : "pdl";
+    const label = s.fuel_type === "DL" ? "Diesel" : "P.Diesel";
+    return '<div class="station' + (isBest ? " best" : "") + '">' +
+      '<div class="station-info"><div class="name">' + s.station + '</div><div class="addr">' + s.suburb + ' · ' + s.address + '</div></div>' +
+      '<div class="chips"><span class="chip ' + chipClass + (isBest ? " best-price" : "") + '">' + label + ' ' + s.price.toFixed(1) + 'c</span></div>' +
+      '</div>';
+  }
+
+  loadPrices();
+  loadCrude();
+  loadHistory();
+  loadSettings();
+  updateFuelButtons();
+</script>
+</body>
+</html>
