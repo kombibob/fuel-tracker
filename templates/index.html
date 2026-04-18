@@ -58,11 +58,14 @@
     .chip { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 99px; color: #fff; }
     .suburb-header { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.07em; padding: 1rem 0 4px; border-bottom: 1px solid #e8e8e4; margin-bottom: 4px; }
     .empty { color: #888; font-size: 13px; padding: 1rem 0; }
-    .footer { font-size: 11px; color: #aaa; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e8e8e4; }
+    .footer { font-size: 11px; color: #aaa; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e8e8e4; margin-bottom: 4rem; }
+    .cookie-banner { position: fixed; bottom: 0; left: 0; right: 0; background: #1a1a1a; color: #fff; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; font-size: 13px; z-index: 100; }
+    .cookie-banner button { font-size: 12px; padding: 5px 16px; border-radius: 8px; border: none; background: #fff; color: #1a1a1a; cursor: pointer; font-weight: 500; flex-shrink: 0; }
     @media (max-width: 600px) {
       .summary { grid-template-columns: repeat(2, 1fr); }
       .controls { gap: 6px; }
       .btn, .fuel-btn { font-size: 12px; padding: 5px 10px; }
+      .cookie-banner { flex-direction: column; text-align: center; gap: 0.5rem; }
     }
   </style>
 </head>
@@ -103,6 +106,7 @@
   </div>
 
   <div id="station-list"></div>
+
 {% if is_local %}
   <div class="section-header" id="settings-header" onclick="toggleSettings()">
     <h2>Notification thresholds</h2>
@@ -130,11 +134,18 @@
     </div>
   </div>
 {% endif %}
+
   <div class="footer" id="footer"></div>
+</div>
+
+<div class="cookie-banner" id="cookie-banner" style="display:none;">
+  <span>This site saves your fuel and suburb preferences as cookies. No personal data is collected.</span>
+  <button onclick="acceptCookies()">OK</button>
 </div>
 
 <script>
   const DEFAULT_SUBURBS = ["Adamstown","Belmont","Charlestown","Hamilton","Hamilton South","Islington","Lambton","Mayfield","Mayfield West","Merewether","New Lambton","Newcastle","Newcastle West","Wallsend","Warners Bay","Wickham"];
+  const DEFAULT_FUELS   = ["DL","PDL"];
 
   const FUEL_CONFIG = {
     "E10":  { label: "E10",          color: "#e07b00" },
@@ -145,12 +156,51 @@
     "PDL":  { label: "Prem. Diesel", color: "#1a7a4a" },
   };
 
-  let activeSuburbs = new Set(DEFAULT_SUBURBS.map(s => s.toLowerCase()));
-  let activeFuels = new Set(["DL","PDL"]);
+  // --- Cookie functions ---
+  function setCookie(name, value, days) {
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + expires + "; path=/; SameSite=Lax";
+  }
+
+  function getCookie(name) {
+    return document.cookie.split("; ").reduce((r, v) => {
+      const parts = v.split("=");
+      return parts[0] === name ? decodeURIComponent(parts[1]) : r;
+    }, null);
+  }
+
+  function savePrefs() {
+    setCookie("fuels", [...activeFuels].join(","), 365);
+    setCookie("suburbs", [...activeSuburbs].join(","), 365);
+  }
+
+  function loadPrefs() {
+    const savedFuels   = getCookie("fuels");
+    const savedSuburbs = getCookie("suburbs");
+    return {
+      fuels:   savedFuels   ? new Set(savedFuels.split(","))   : new Set(DEFAULT_FUELS),
+      suburbs: savedSuburbs ? new Set(savedSuburbs.split(",")) : new Set(DEFAULT_SUBURBS.map(s => s.toLowerCase())),
+    };
+  }
+
+  function acceptCookies() {
+    setCookie("cookie_accepted", "1", 365);
+    document.getElementById("cookie-banner").style.display = "none";
+  }
+
+  // Load saved preferences
+  const prefs = loadPrefs();
+  let activeSuburbs = prefs.suburbs;
+  let activeFuels   = prefs.fuels;
   let allData = [];
   let historyChart = null;
   let suburbsOpen = true;
   let settingsOpen = false;
+
+  // Show cookie banner if not yet accepted
+  if (!getCookie("cookie_accepted")) {
+    document.getElementById("cookie-banner").style.display = "flex";
+  }
 
   function toggleSuburbs() {
     suburbsOpen = !suburbsOpen;
@@ -196,6 +246,7 @@
         } else {
           activeFuels.add(code); btn.classList.add("active");
         }
+        savePrefs();
         render();
         updateChart();
       };
@@ -218,6 +269,7 @@
         } else {
           activeSuburbs.add(key); p.classList.add("active");
         }
+        savePrefs();
         updateSuburbCount();
         render();
       };
@@ -234,6 +286,7 @@
 
   function selectAll() {
     document.querySelectorAll(".pill").forEach(p => { activeSuburbs.add(p.textContent.toLowerCase()); p.classList.add("active"); });
+    savePrefs();
     updateSuburbCount();
     render();
   }
@@ -242,6 +295,7 @@
     document.querySelectorAll(".pill").forEach(p => { activeSuburbs.delete(p.textContent.toLowerCase()); p.classList.remove("active"); });
     const first = document.querySelector(".pill");
     if (first) { activeSuburbs.add(first.textContent.toLowerCase()); first.classList.add("active"); }
+    savePrefs();
     updateSuburbCount();
     render();
   }
@@ -250,13 +304,9 @@
     try {
       const r = await fetch("/api/settings");
       const d = await r.json();
-      if (d.threshold_290) document.getElementById("t290").value = d.threshold_290;
-      if (d.threshold_300) document.getElementById("t300").value = d.threshold_300;
-      if (d.threshold_315) document.getElementById("t315").value = d.threshold_315;
-      if (d.fuel_types) {
-        activeFuels = new Set(d.fuel_types.split(",").map(f => f.trim()));
-        buildFuelButtons();
-      }
+      if (d.threshold_290 && document.getElementById("t290")) document.getElementById("t290").value = d.threshold_290;
+      if (d.threshold_300 && document.getElementById("t300")) document.getElementById("t300").value = d.threshold_300;
+      if (d.threshold_315 && document.getElementById("t315")) document.getElementById("t315").value = d.threshold_315;
     } catch(e) {}
   }
 
@@ -324,38 +374,28 @@
       ]);
       const fuelHistory = await fuelResp.json();
       const crudeHistory = await crudeResp.json();
-
       const byFuelDate = {};
       fuelHistory.forEach(r => {
         if (!byFuelDate[r.fuel_type]) byFuelDate[r.fuel_type] = {};
         byFuelDate[r.fuel_type][r.date] = r.min_price;
       });
-
       const crudeByDate = {};
       crudeHistory.forEach(r => { crudeByDate[r.date] = r.brent_aud; });
-
       const allDates = [...new Set([
         ...Object.values(byFuelDate).flatMap(d => Object.keys(d)),
         ...Object.keys(crudeByDate)
       ])].sort();
-
       if (allDates.length === 0) return;
-
       window._chartData = { byFuelDate, crudeByDate, allDates };
       updateChart();
-
     } catch(e) { console.error("Chart error:", e); }
   }
 
   function updateChart() {
     if (!window._chartData) return;
     const { byFuelDate, crudeByDate, allDates } = window._chartData;
-
     const labels = allDates.map(d => new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}));
-
     const datasets = [];
-
-    // Add a line for each active fuel type that has history data
     Object.entries(FUEL_CONFIG).forEach(([code, cfg]) => {
       if (!activeFuels.has(code)) return;
       if (!byFuelDate[code]) return;
@@ -370,8 +410,6 @@
         spanGaps: true,
       });
     });
-
-    // Always add Brent crude
     datasets.push({
       label: "Brent Crude (AUD$/bbl)",
       data: allDates.map(d => crudeByDate[d] || null),
@@ -383,15 +421,13 @@
       spanGaps: true,
       borderDash: [4,3],
     });
-
     const ctx = document.getElementById("history-chart").getContext("2d");
     if (historyChart) historyChart.destroy();
     historyChart = new Chart(ctx, {
       type: "line",
       data: { labels, datasets },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { position: "top", labels: { font: { size: 11 }, boxWidth: 20 } },
@@ -422,7 +458,6 @@
     const sort = document.getElementById("sort-select").value;
     let data = allData.filter(s => activeSuburbs.has(s.suburb.toLowerCase()) && activeFuels.has(s.fuel_type));
 
-    // Build summary cards dynamically for active fuel types
     const summaryBar = document.getElementById("summary-bar");
     const crudeCard = document.getElementById("crude-card");
     summaryBar.innerHTML = "";
@@ -461,7 +496,6 @@
       return;
     }
 
-    // Find cheapest per fuel type for highlighting
     const cheapestPerFuel = {};
     activeFuelList.forEach(fuel => {
       const prices = data.filter(s => s.fuel_type === fuel).map(s => s.price);
@@ -493,9 +527,8 @@
   function stationCard(s, cheapestPerFuel) {
     const cfg = FUEL_CONFIG[s.fuel_type] || { label: s.fuel_type, color: "#888" };
     const isBest = cheapestPerFuel[s.fuel_type] === s.price;
-    const borderStyle = isBest ? " best" : "";
     const chipStyle = "background:" + cfg.color + (isBest ? ";outline:2px solid #22a06b;outline-offset:1px" : "");
-    return '<div class="station' + borderStyle + '">' +
+    return '<div class="station' + (isBest ? " best" : "") + '">' +
       '<div class="station-info"><div class="name">' + s.station + '</div>' +
       '<div class="addr">' + s.suburb + ' · ' + s.address + '</div></div>' +
       '<div class="chips"><span class="chip" style="' + chipStyle + '">' + cfg.label + ' ' + s.price.toFixed(1) + 'c</span></div>' +
