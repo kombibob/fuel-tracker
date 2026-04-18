@@ -21,7 +21,16 @@ NTFY_290   = os.environ.get("NTFY_290", "")
 NTFY_300   = os.environ.get("NTFY_300", "")
 NTFY_315   = os.environ.get("NTFY_315", "")
 
-FUEL_TYPES = ["DL", "PDL"]
+# All available fuel types from FuelCheck API
+ALL_FUEL_TYPES = {
+    "E10":  "Ethanol 10%",
+    "U91":  "Unleaded 91",
+    "P95":  "Premium 95",
+    "P98":  "Premium 98",
+    "DL":   "Diesel",
+    "PDL":  "Premium Diesel",
+    "LPG":  "LPG",
+}
 
 NEWCASTLE_LAT  = -32.9283
 NEWCASTLE_LNG  = 151.7817
@@ -68,10 +77,11 @@ def init_db():
         date TEXT NOT NULL UNIQUE, brent_usd REAL, brent_aud REAL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
-    # Default thresholds
+    # Default settings
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_290','290')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_300','300')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_315','315')")
+    c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('fuel_types','DL,PDL')")
     conn.commit()
     conn.close()
     log.info("Database initialised at %s", DB_PATH)
@@ -101,6 +111,12 @@ def get_all_settings():
     rows = {r["key"]: r["value"] for r in c.fetchall()}
     conn.close()
     return rows
+
+
+def get_active_fuel_types():
+    """Get list of fuel types to fetch from settings."""
+    fuel_str = get_setting("fuel_types", "DL,PDL")
+    return [f.strip() for f in fuel_str.split(",") if f.strip()]
 
 
 def save_prices(records):
@@ -248,11 +264,15 @@ def fetch_and_store():
         log.error("Aborting fetch — no valid token")
         return
 
+    # Get active fuel types from settings
+    fuel_types = get_active_fuel_types()
+    log.info("Fetching fuel types: %s", fuel_types)
+
     fetched_at = datetime.now().isoformat(timespec="seconds")
     records    = []
     cheapest   = {}
 
-    for fuel_type in FUEL_TYPES:
+    for fuel_type in fuel_types:
         stations = fetch_prices_nearby(fuel_type, token)
         for s in stations:
             try:
@@ -278,7 +298,7 @@ def fetch_and_store():
     t315 = float(get_setting("threshold_315", 315))
 
     for fuel, info in cheapest.items():
-        label = "Premium Diesel" if fuel == "PDL" else "Diesel"
+        label = ALL_FUEL_TYPES.get(fuel, fuel)
         msg = f"{label} {info['price']:.1f}c — {info['station']}, {info['suburb']}"
         if info["price"] <= t290 and NTFY_290:
             send_ntfy_alert(NTFY_290, msg)
@@ -299,7 +319,10 @@ def send_ntfy_alert(url, message):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    cf_ip = request.headers.get("CF-Connecting-IP", "")
+    real_ip = cf_ip if cf_ip else request.remote_addr
+    is_local = not cf_ip and request.remote_addr.startswith(("192.168.", "10.", "127.", "172."))
+    return render_template("index.html", is_local=is_local)
 
 @app.route("/api/prices/latest")
 def api_latest():
@@ -330,7 +353,21 @@ def api_settings_post():
                 set_setting(key, float(value))
             except ValueError:
                 return jsonify({"status": "error", "message": f"Invalid value for {key}"}), 400
+        elif key == "fuel_types":
+            # Validate fuel types
+            valid = [f for f in value.split(",") if f.strip() in ALL_FUEL_TYPES]
+            if valid:
+                set_setting("fuel_types", ",".join(valid))
     return jsonify({"status": "ok"})
+
+@app.route("/api/fuel-types")
+def api_fuel_types():
+    """Return all available fuel types and which are currently active."""
+    active = get_active_fuel_types()
+    return jsonify({
+        "all": ALL_FUEL_TYPES,
+        "active": active
+    })
 
 @app.route("/api/fetch", methods=["POST"])
 def api_fetch():
