@@ -1,9 +1,11 @@
 import os
+import csv
+import io
 import requests
 import sqlite3
 import base64
 import yfinance as yf
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, date
 import logging
@@ -21,7 +23,6 @@ NTFY_290   = os.environ.get("NTFY_290", "")
 NTFY_300   = os.environ.get("NTFY_300", "")
 NTFY_315   = os.environ.get("NTFY_315", "")
 
-# All available fuel types from FuelCheck API
 ALL_FUEL_TYPES = {
     "E10":  "Ethanol 10%",
     "U91":  "Unleaded 91",
@@ -40,6 +41,12 @@ TOKEN_URL  = "https://api.onegov.nsw.gov.au/oauth/client_credential/accesstoken?
 NEARBY_URL = "https://api.onegov.nsw.gov.au/FuelPriceCheck/v1/fuel/prices/nearby"
 
 _token_cache = {"token": None, "expires_at": 0}
+
+
+def is_local_request():
+    """Returns True if the request came directly from the local network,
+    False if it came through Cloudflare tunnel."""
+    return not request.headers.get("CF-Connecting-IP", "")
 
 
 def get_token():
@@ -77,7 +84,6 @@ def init_db():
         date TEXT NOT NULL UNIQUE, brent_usd REAL, brent_aud REAL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
-    # Default settings
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_290','290')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_300','300')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_315','315')")
@@ -114,7 +120,6 @@ def get_all_settings():
 
 
 def get_active_fuel_types():
-    """Get list of fuel types to fetch from settings."""
     fuel_str = get_setting("fuel_types", "DL,PDL")
     return [f.strip() for f in fuel_str.split(",") if f.strip()]
 
@@ -171,6 +176,31 @@ def get_latest_crude():
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_all_prices_for_export():
+    """Get all prices joined with crude oil data for CSV export."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            p.fetched_at,
+            DATE(p.fetched_at) as date,
+            p.suburb,
+            p.station,
+            p.address,
+            p.fuel_type,
+            p.price,
+            co.brent_usd,
+            co.brent_aud
+        FROM prices p
+        LEFT JOIN crude_oil co ON DATE(p.fetched_at) = co.date
+        ORDER BY p.fetched_at DESC
+    """)
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
 
 
 def fetch_and_store_crude():
@@ -264,7 +294,6 @@ def fetch_and_store():
         log.error("Aborting fetch — no valid token")
         return
 
-    # Get active fuel types from settings
     fuel_types = get_active_fuel_types()
     log.info("Fetching fuel types: %s", fuel_types)
 
@@ -292,7 +321,6 @@ def fetch_and_store():
     else:
         log.warning("No price records returned from API")
 
-    # Read thresholds from database
     t290 = float(get_setting("threshold_290", 290))
     t300 = float(get_setting("threshold_300", 300))
     t315 = float(get_setting("threshold_315", 315))
@@ -319,9 +347,7 @@ def send_ntfy_alert(url, message):
 
 @app.route("/")
 def index():
-    cf_ip = request.headers.get("CF-Connecting-IP", "")
-    real_ip = cf_ip if cf_ip else request.remote_addr
-    is_local = not cf_ip and request.remote_addr.startswith(("192.168.", "10.", "127.", "172."))
+    is_local = is_local_request()
     return render_template("index.html", is_local=is_local)
 
 @app.route("/api/prices/latest")
@@ -346,6 +372,8 @@ def api_settings_get():
 
 @app.route("/api/settings", methods=["POST"])
 def api_settings_post():
+    if not is_local_request():
+        return jsonify({"error": "Not available"}), 403
     data = request.json
     for key, value in data.items():
         if key.startswith("threshold_"):
@@ -354,7 +382,6 @@ def api_settings_post():
             except ValueError:
                 return jsonify({"status": "error", "message": f"Invalid value for {key}"}), 400
         elif key == "fuel_types":
-            # Validate fuel types
             valid = [f for f in value.split(",") if f.strip() in ALL_FUEL_TYPES]
             if valid:
                 set_setting("fuel_types", ",".join(valid))
@@ -362,12 +389,39 @@ def api_settings_post():
 
 @app.route("/api/fuel-types")
 def api_fuel_types():
-    """Return all available fuel types and which are currently active."""
     active = get_active_fuel_types()
-    return jsonify({
-        "all": ALL_FUEL_TYPES,
-        "active": active
-    })
+    return jsonify({"all": ALL_FUEL_TYPES, "active": active})
+
+@app.route("/api/export/csv")
+def api_export_csv():
+    if not is_local_request():
+        return jsonify({"error": "Not available"}), 403
+    rows = get_all_prices_for_export()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "fetched_at", "date", "suburb", "station", "address",
+        "fuel_type", "price_cents_per_litre", "brent_usd", "brent_aud"
+    ])
+    for row in rows:
+        writer.writerow([
+            row["fetched_at"],
+            row["date"],
+            row["suburb"],
+            row["station"],
+            row["address"],
+            row["fuel_type"],
+            row["price"],
+            row["brent_usd"] or "",
+            row["brent_aud"] or "",
+        ])
+    output.seek(0)
+    filename = f"fuel_prices_{date.today().isoformat()}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 @app.route("/api/fetch", methods=["POST"])
 def api_fetch():
