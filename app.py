@@ -33,19 +33,80 @@ ALL_FUEL_TYPES = {
     "LPG":  "LPG",
 }
 
+# Newcastle home base — used for scheduled fetches and storing history
 NEWCASTLE_LAT  = -32.9283
 NEWCASTLE_LNG  = 151.7817
 SEARCH_RADIUS  = 15
 
+VALID_RADII = [5, 10, 15, 20, 25]
+
 TOKEN_URL  = "https://api.onegov.nsw.gov.au/oauth/client_credential/accesstoken?grant_type=client_credentials"
 NEARBY_URL = "https://api.onegov.nsw.gov.au/FuelPriceCheck/v1/fuel/prices/nearby"
 
+# Path to the bundled NSW locality CSV (added to container via Dockerfile)
+LOCALITY_CSV = "/app/nsw_localities.csv"
+
 _token_cache = {"token": None, "expires_at": 0}
+
+# In-memory locality index: built once on startup
+# Structure: list of dicts {suburb, postcode, lat, lng}
+_localities = []
+
+
+def load_localities():
+    """Load NSW locality data from bundled CSV into memory."""
+    global _localities
+    if not os.path.exists(LOCALITY_CSV):
+        log.warning("Locality CSV not found at %s", LOCALITY_CSV)
+        return
+    with open(LOCALITY_CSV, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                _localities.append({
+                    "suburb":   row["locality"].strip().upper(),
+                    "postcode": row["postcode"].strip(),
+                    "lat":      float(row["lat"]),
+                    "lng":      float(row["lng"]),
+                })
+            except (KeyError, ValueError):
+                continue
+    log.info("Loaded %d NSW localities", len(_localities))
+
+
+def search_locality(query):
+    """
+    Search localities by postcode or suburb name.
+    Returns a list of matches: [{suburb, postcode, lat, lng}, ...]
+    """
+    query = query.strip()
+    if not query:
+        return []
+
+    results = []
+    if query.isdigit():
+        # Postcode lookup
+        results = [l for l in _localities if l["postcode"] == query]
+    else:
+        # Suburb name lookup — prefix match first, then contains
+        q = query.upper()
+        results = [l for l in _localities if l["suburb"].startswith(q)]
+        if not results:
+            results = [l for l in _localities if q in l["suburb"]]
+
+    # Deduplicate by suburb+postcode, keep first match
+    seen = set()
+    deduped = []
+    for r in results:
+        key = (r["suburb"], r["postcode"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+
+    return deduped[:10]  # cap at 10 suggestions
 
 
 def is_local_request():
-    """Returns True if the request came directly from the local network,
-    False if it came through Cloudflare tunnel."""
     return not request.headers.get("CF-Connecting-IP", "")
 
 
@@ -179,21 +240,12 @@ def get_latest_crude():
 
 
 def get_all_prices_for_export():
-    """Get all prices joined with crude oil data for CSV export."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT
-            p.fetched_at,
-            DATE(p.fetched_at) as date,
-            p.suburb,
-            p.station,
-            p.address,
-            p.fuel_type,
-            p.price,
-            co.brent_usd,
-            co.brent_aud
+        SELECT p.fetched_at, DATE(p.fetched_at) as date, p.suburb, p.station,
+               p.address, p.fuel_type, p.price, co.brent_usd, co.brent_aud
         FROM prices p
         LEFT JOIN crude_oil co ON DATE(p.fetched_at) = co.date
         ORDER BY p.fetched_at DESC
@@ -243,15 +295,20 @@ def derive_suburb(address):
     return ""
 
 
-def fetch_prices_nearby(fuel_type, token):
+def fetch_prices_nearby(fuel_type, token, lat=None, lng=None, radius=None):
+    """Fetch prices from FuelCheck API for given coordinates and radius.
+    Defaults to Newcastle home base if lat/lng not supplied."""
+    lat    = lat    if lat    is not None else NEWCASTLE_LAT
+    lng    = lng    if lng    is not None else NEWCASTLE_LNG
+    radius = radius if radius is not None else SEARCH_RADIUS
     try:
         r = requests.post(
             NEARBY_URL,
             json={
                 "fueltype":  fuel_type,
-                "latitude":  NEWCASTLE_LAT,
-                "longitude": NEWCASTLE_LNG,
-                "radius":    SEARCH_RADIUS,
+                "latitude":  lat,
+                "longitude": lng,
+                "radius":    radius,
                 "sortby":    "Price",
                 "ascending": "true",
             },
@@ -279,7 +336,8 @@ def fetch_prices_nearby(fuel_type, token):
                 "suburb":  derive_suburb(address),
                 "price":   p.get("price"),
             })
-        log.info("Fetched %d stations for %s within %dkm", len(results), fuel_type, SEARCH_RADIUS)
+        log.info("Fetched %d stations for %s within %dkm of (%.4f,%.4f)",
+                 len(results), fuel_type, radius, lat, lng)
         return results
     except requests.RequestException as e:
         resp = e.response.text if hasattr(e, "response") and e.response is not None else "no response"
@@ -288,28 +346,27 @@ def fetch_prices_nearby(fuel_type, token):
 
 
 def fetch_and_store():
-    log.info("Starting price fetch at %s", datetime.now().isoformat())
+    """Scheduled job — always fetches Newcastle, stores to DB, fires ntfy alerts."""
+    log.info("Starting scheduled Newcastle fetch at %s", datetime.now().isoformat())
     token = get_token()
     if not token:
         log.error("Aborting fetch — no valid token")
         return
 
     fuel_types = get_active_fuel_types()
-    log.info("Fetching fuel types: %s", fuel_types)
-
     fetched_at = datetime.now().isoformat(timespec="seconds")
     records    = []
     cheapest   = {}
 
     for fuel_type in fuel_types:
-        stations = fetch_prices_nearby(fuel_type, token)
+        stations = fetch_prices_nearby(fuel_type, token)  # uses Newcastle defaults
         for s in stations:
             try:
-                price    = float(s.get("price", 0))
-                name     = s.get("name", "Unknown")
-                addr_str = s.get("address", "")
-                suburb   = s.get("suburb", "").title().strip()
-                records.append((fetched_at, suburb, name, addr_str, fuel_type, price))
+                price  = float(s.get("price", 0))
+                name   = s.get("name", "Unknown")
+                addr   = s.get("address", "")
+                suburb = s.get("suburb", "").title().strip()
+                records.append((fetched_at, suburb, name, addr, fuel_type, price))
                 if fuel_type not in cheapest or price < cheapest[fuel_type]["price"]:
                     cheapest[fuel_type] = {"price": price, "station": name, "suburb": suburb}
             except (ValueError, TypeError):
@@ -345,30 +402,39 @@ def send_ntfy_alert(url, message):
         log.error("ntfy error: %s", e)
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.route("/")
 def index():
-    is_local = is_local_request()
-    return render_template("index.html", is_local=is_local)
+    return render_template("index.html", is_local=is_local_request())
+
 
 @app.route("/api/prices/latest")
 def api_latest():
     return jsonify(get_latest_prices())
 
+
 @app.route("/api/prices/history")
 def api_history():
     return jsonify(get_price_history(30))
+
 
 @app.route("/api/crude/latest")
 def api_crude_latest():
     return jsonify(get_latest_crude())
 
+
 @app.route("/api/crude/history")
 def api_crude_history():
     return jsonify(get_crude_history(30))
 
+
 @app.route("/api/settings", methods=["GET"])
 def api_settings_get():
     return jsonify(get_all_settings())
+
 
 @app.route("/api/settings", methods=["POST"])
 def api_settings_post():
@@ -387,10 +453,66 @@ def api_settings_post():
                 set_setting("fuel_types", ",".join(valid))
     return jsonify({"status": "ok"})
 
+
 @app.route("/api/fuel-types")
 def api_fuel_types():
-    active = get_active_fuel_types()
-    return jsonify({"all": ALL_FUEL_TYPES, "active": active})
+    return jsonify({"all": ALL_FUEL_TYPES, "active": get_active_fuel_types()})
+
+
+@app.route("/api/locality/search")
+def api_locality_search():
+    """Autocomplete endpoint — returns matching NSW suburbs/postcodes."""
+    q = request.args.get("q", "").strip()
+    if len(q) < 2:
+        return jsonify([])
+    results = search_locality(q)
+    return jsonify(results)
+
+
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    """Live search for any NSW location — NOT stored to database."""
+    body = request.json or {}
+    try:
+        lat    = float(body["lat"])
+        lng    = float(body["lng"])
+        radius = int(body.get("radius", 15))
+    except (KeyError, ValueError, TypeError):
+        return jsonify({"error": "lat, lng and radius are required"}), 400
+
+    if radius not in VALID_RADII:
+        return jsonify({"error": f"radius must be one of {VALID_RADII}"}), 400
+
+    token = get_token()
+    if not token:
+        return jsonify({"error": "Could not obtain API token"}), 503
+
+    # Fetch all fuel types (same set as configured for Newcastle)
+    fuel_types = get_active_fuel_types()
+    results = []
+    for fuel_type in fuel_types:
+        stations = fetch_prices_nearby(fuel_type, token, lat=lat, lng=lng, radius=radius)
+        for s in stations:
+            try:
+                results.append({
+                    "station":   s["name"],
+                    "suburb":    s["suburb"],
+                    "address":   s["address"],
+                    "fuel_type": fuel_type,
+                    "price":     float(s["price"]),
+                })
+            except (ValueError, TypeError):
+                continue
+
+    results.sort(key=lambda x: x["price"])
+    return jsonify({
+        "lat":     lat,
+        "lng":     lng,
+        "radius":  radius,
+        "count":   len(results),
+        "results": results,
+    })
+
 
 @app.route("/api/export/csv")
 def api_export_csv():
@@ -405,29 +527,22 @@ def api_export_csv():
     ])
     for row in rows:
         writer.writerow([
-            row["fetched_at"],
-            row["date"],
-            row["suburb"],
-            row["station"],
-            row["address"],
-            row["fuel_type"],
-            row["price"],
-            row["brent_usd"] or "",
-            row["brent_aud"] or "",
+            row["fetched_at"], row["date"], row["suburb"], row["station"],
+            row["address"], row["fuel_type"], row["price"],
+            row["brent_usd"] or "", row["brent_aud"] or "",
         ])
     output.seek(0)
     filename = f"fuel_prices_{date.today().isoformat()}.csv"
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    return Response(output.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"})
+
 
 @app.route("/api/fetch", methods=["POST"])
 def api_fetch():
     fetch_and_store()
     fetch_and_store_crude()
     return jsonify({"status": "ok"})
+
 
 @app.route("/health")
 def health():
@@ -444,6 +559,7 @@ def start_scheduler():
 
 if __name__ == "__main__":
     init_db()
+    load_localities()
     start_scheduler()
     fetch_and_store()
     fetch_and_store_crude()
