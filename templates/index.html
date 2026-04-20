@@ -12,6 +12,23 @@
     header h1 { font-size: 18px; font-weight: 500; }
     header span { font-size: 12px; color: #aaa; }
     .container { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem; }
+
+    /* Search bar */
+    .search-bar { background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .search-bar .search-group { flex: 1; min-width: 180px; position: relative; }
+    .search-bar label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 4px; }
+    .search-bar input { width: 100%; font-size: 14px; padding: 7px 10px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; }
+    .search-bar input:focus { outline: none; border-color: #1a1a1a; }
+    .search-bar select { width: 100%; font-size: 14px; padding: 7px 10px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; cursor: pointer; }
+    .search-bar .btn { align-self: flex-end; white-space: nowrap; }
+    .autocomplete-list { position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #d0d0cc; border-radius: 8px; margin-top: 2px; z-index: 50; max-height: 220px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .autocomplete-list li { list-style: none; padding: 8px 12px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; }
+    .autocomplete-list li:hover, .autocomplete-list li.selected { background: #f5f5f0; }
+    .autocomplete-list li .postcode { color: #888; font-size: 12px; }
+    .search-mode-badge { font-size: 11px; background: #e8f4ff; color: #1a5cb5; border-radius: 99px; padding: 3px 10px; border: 1px solid #c0d8f0; display: inline-flex; align-items: center; gap: 6px; margin-bottom: 1rem; }
+    .search-mode-badge button { background: none; border: none; cursor: pointer; color: #888; font-size: 12px; padding: 0; line-height: 1; }
+    .search-mode-badge button:hover { color: #1a1a1a; }
+
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
     .summary-card { background: #fff; border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid #e8e8e4; }
     .summary-card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
@@ -35,6 +52,7 @@
     select { font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; cursor: pointer; }
     .btn { font-size: 13px; padding: 6px 14px; border-radius: 8px; border: 1px solid #d0d0cc; background: #fff; color: #1a1a1a; cursor: pointer; font-weight: 500; }
     .btn.primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .fuel-btn { font-size: 12px; padding: 5px 12px; border-radius: 99px; border: 1px solid #d0d0cc; background: #fff; color: #555; cursor: pointer; font-weight: 500; transition: all 0.1s; }
     .fuel-btn.active { color: #fff; border-color: transparent; }
     .fuel-E10  { --fc: #e07b00; }
@@ -66,20 +84,51 @@
       .controls { gap: 6px; }
       .btn, .fuel-btn { font-size: 12px; padding: 5px 10px; }
       .cookie-banner { flex-direction: column; text-align: center; gap: 0.5rem; }
+      .search-bar { gap: 8px; }
     }
   </style>
 </head>
 <body>
 <header>
-  <h1>Newcastle Fuel Tracker</h1>
+  <h1>NSW Fuel Tracker</h1>
   <span id="last-updated">Loading...</span>
 </header>
 <div class="container">
 
+  <!-- Location search bar -->
+  <div class="search-bar">
+    <div class="search-group">
+      <label for="location-input">Suburb or postcode</label>
+      <input type="text" id="location-input" placeholder="e.g. Bondi or 2026" autocomplete="off">
+      <ul class="autocomplete-list" id="autocomplete-list" style="display:none;"></ul>
+    </div>
+    <div class="search-group" style="max-width:130px;">
+      <label for="radius-select">Search radius</label>
+      <select id="radius-select">
+        <option value="5">5 km</option>
+        <option value="10">10 km</option>
+        <option value="15" selected>15 km</option>
+        <option value="20">20 km</option>
+        <option value="25">25 km</option>
+      </select>
+    </div>
+    <button class="btn primary" id="search-btn" onclick="doLocationSearch()">Search</button>
+    <button class="btn" id="home-btn" onclick="goHome()" style="display:none;">← Newcastle</button>
+  </div>
+
+  <!-- Badge shown when viewing a non-Newcastle search result -->
+  <div id="search-mode-badge" style="display:none;">
+    <span class="search-mode-badge">
+      <span id="search-mode-label"></span>
+      <button onclick="goHome()" title="Back to Newcastle">✕</button>
+    </span>
+  </div>
+
   <div class="summary" id="summary-bar"></div>
 
-  <div class="chart-card">
-    <h2>Price history — last 30 days</h2>
+  <!-- History chart only shown in Newcastle (home) mode -->
+  <div class="chart-card" id="history-card">
+    <h2>Price history — last 30 days (Newcastle)</h2>
     <div class="chart-wrap"><canvas id="history-chart"></canvas></div>
   </div>
 
@@ -102,7 +151,7 @@
       <option value="name">Station name</option>
     </select>
     <div id="fuel-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-    <button class="btn primary" onclick="manualFetch()">Fetch now</button>
+    <button class="btn primary" id="fetch-btn" onclick="manualFetch()">Fetch now</button>
   </div>
 
   <div id="station-list"></div>
@@ -139,7 +188,7 @@
 </div>
 
 <div class="cookie-banner" id="cookie-banner" style="display:none;">
-  <span>This site saves your fuel and suburb preferences as cookies. No personal data is collected.</span>
+  <span>This site saves your fuel, suburb, and location preferences as cookies. No personal data is collected.</span>
   <button onclick="acceptCookies()">OK</button>
 </div>
 
@@ -156,24 +205,28 @@
     "PDL":  { label: "Prem. Diesel", color: "#1a7a4a" },
   };
 
-  // --- Cookie functions ---
+  // --- Cookie helpers ---
   function setCookie(name, value, days) {
     const expires = new Date(Date.now() + days * 864e5).toUTCString();
     document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + expires + "; path=/; SameSite=Lax";
   }
-
   function getCookie(name) {
     return document.cookie.split("; ").reduce((r, v) => {
       const parts = v.split("=");
       return parts[0] === name ? decodeURIComponent(parts[1]) : r;
     }, null);
   }
-
   function savePrefs() {
-    setCookie("fuels", [...activeFuels].join(","), 365);
+    setCookie("fuels",   [...activeFuels].join(","),   365);
     setCookie("suburbs", [...activeSuburbs].join(","), 365);
   }
-
+  function saveLocationPref(suburb, postcode, lat, lng, radius) {
+    setCookie("loc_suburb",   suburb,           365);
+    setCookie("loc_postcode", postcode,          365);
+    setCookie("loc_lat",      lat,               365);
+    setCookie("loc_lng",      lng,               365);
+    setCookie("loc_radius",   radius,            365);
+  }
   function loadPrefs() {
     const savedFuels   = getCookie("fuels");
     const savedSuburbs = getCookie("suburbs");
@@ -182,29 +235,40 @@
       suburbs: savedSuburbs ? new Set(savedSuburbs.split(",")) : new Set(DEFAULT_SUBURBS.map(s => s.toLowerCase())),
     };
   }
-
   function acceptCookies() {
     setCookie("cookie_accepted", "1", 365);
     document.getElementById("cookie-banner").style.display = "none";
   }
 
-  // Load saved preferences
+  // --- State ---
   const prefs = loadPrefs();
-  let activeSuburbs = prefs.suburbs;
-  let activeFuels   = prefs.fuels;
-  let allData = [];
-  let historyChart = null;
-  let suburbsOpen = true;
-  let settingsOpen = false;
+  let activeSuburbs  = prefs.suburbs;
+  let activeFuels    = prefs.fuels;
+  let allData        = [];
+  let searchData     = [];
+  let historyChart   = null;
+  let suburbsOpen    = true;
+  let settingsOpen   = false;
+  let isSearchMode   = false;   // true = showing live search results
+  let acResults      = [];      // current autocomplete results
+  let acIndex        = -1;      // keyboard selection index
+  let acDebounce     = null;
 
-  // Show cookie banner if not yet accepted
   if (!getCookie("cookie_accepted")) {
     document.getElementById("cookie-banner").style.display = "flex";
   }
 
+  // Restore saved radius
+  const savedRadius = getCookie("loc_radius");
+  if (savedRadius) {
+    const sel = document.getElementById("radius-select");
+    if ([...sel.options].some(o => o.value === savedRadius)) sel.value = savedRadius;
+  }
+
+  // --- Collapsibles ---
   function toggleSuburbs() {
     suburbsOpen = !suburbsOpen;
-    const el = document.getElementById("suburb-collapsible");
+    const el  = document.getElementById("suburb-collapsible");
     const hdr = document.getElementById("suburb-header");
     if (suburbsOpen) {
       el.classList.remove("collapsed");
@@ -216,10 +280,9 @@
       hdr.classList.remove("open");
     }
   }
-
   function toggleSettings() {
     settingsOpen = !settingsOpen;
-    const el = document.getElementById("settings-collapsible");
+    const el  = document.getElementById("settings-collapsible");
     const hdr = document.getElementById("settings-header");
     if (settingsOpen) {
       el.classList.remove("collapsed");
@@ -232,6 +295,7 @@
     }
   }
 
+  // --- Fuel buttons ---
   function buildFuelButtons() {
     const container = document.getElementById("fuel-btns");
     container.innerHTML = "";
@@ -248,19 +312,20 @@
         }
         savePrefs();
         render();
-        updateChart();
+        if (!isSearchMode) updateChart();
       };
       container.appendChild(btn);
     });
   }
 
+  // --- Suburb pills ---
   function buildSuburbPills(data) {
     const pillGroup = document.getElementById("suburb-pills");
     pillGroup.innerHTML = "";
     const suburbs = [...new Set(data.map(s => s.suburb))].sort();
     suburbs.forEach(s => {
       const key = s.toLowerCase();
-      const p = document.createElement("button");
+      const p   = document.createElement("button");
       p.className = "pill" + (activeSuburbs.has(key) ? " active" : "");
       p.textContent = s;
       p.onclick = () => {
@@ -269,7 +334,7 @@
         } else {
           activeSuburbs.add(key); p.classList.add("active");
         }
-        savePrefs();
+        if (!isSearchMode) savePrefs();
         updateSuburbCount();
         render();
       };
@@ -279,27 +344,23 @@
     el.style.maxHeight = el.scrollHeight + "px";
     updateSuburbCount();
   }
-
   function updateSuburbCount() {
     document.getElementById("suburb-count").textContent = "(" + activeSuburbs.size + " selected)";
   }
-
   function selectAll() {
     document.querySelectorAll(".pill").forEach(p => { activeSuburbs.add(p.textContent.toLowerCase()); p.classList.add("active"); });
-    savePrefs();
-    updateSuburbCount();
-    render();
+    if (!isSearchMode) savePrefs();
+    updateSuburbCount(); render();
   }
-
   function selectNone() {
     document.querySelectorAll(".pill").forEach(p => { activeSuburbs.delete(p.textContent.toLowerCase()); p.classList.remove("active"); });
     const first = document.querySelector(".pill");
     if (first) { activeSuburbs.add(first.textContent.toLowerCase()); first.classList.add("active"); }
-    savePrefs();
-    updateSuburbCount();
-    render();
+    if (!isSearchMode) savePrefs();
+    updateSuburbCount(); render();
   }
 
+  // --- Settings ---
   async function loadSettings() {
     try {
       const r = await fetch("/api/settings");
@@ -309,7 +370,6 @@
       if (d.threshold_315 && document.getElementById("t315")) document.getElementById("t315").value = d.threshold_315;
     } catch(e) {}
   }
-
   async function saveSettings() {
     const data = {
       threshold_290: document.getElementById("t290").value,
@@ -329,6 +389,239 @@
     } catch(e) {}
   }
 
+  // --- Autocomplete ---
+  const locInput = document.getElementById("location-input");
+  const acList   = document.getElementById("autocomplete-list");
+
+  locInput.addEventListener("input", () => {
+    clearTimeout(acDebounce);
+    const q = locInput.value.trim();
+    if (q.length < 2) { hideAC(); return; }
+    acDebounce = setTimeout(() => fetchAC(q), 250);
+  });
+
+  locInput.addEventListener("keydown", e => {
+    if (!acList.style.display || acList.style.display === "none") {
+      if (e.key === "Enter") doLocationSearch();
+      return;
+    }
+    const items = acList.querySelectorAll("li");
+    if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); highlightAC(items); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); highlightAC(items); }
+    else if (e.key === "Enter") { e.preventDefault(); if (acIndex >= 0 && items[acIndex]) items[acIndex].click(); else doLocationSearch(); }
+    else if (e.key === "Escape") hideAC();
+  });
+
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".search-group")) hideAC();
+  });
+
+  async function fetchAC(q) {
+    try {
+      const r = await fetch("/api/locality/search?q=" + encodeURIComponent(q));
+      acResults = await r.json();
+      acIndex = -1;
+      if (!acResults.length) { hideAC(); return; }
+      acList.innerHTML = "";
+      acResults.forEach((loc, i) => {
+        const li = document.createElement("li");
+        li.innerHTML = '<span>' + loc.suburb.charAt(0) + loc.suburb.slice(1).toLowerCase() + '</span>' +
+                       '<span class="postcode">' + loc.postcode + '</span>';
+        li.onclick = () => selectAC(loc);
+        acList.appendChild(li);
+      });
+      acList.style.display = "block";
+    } catch(e) { hideAC(); }
+  }
+
+  function highlightAC(items) {
+    items.forEach((li, i) => li.classList.toggle("selected", i === acIndex));
+    if (acIndex >= 0) {
+      const loc = acResults[acIndex];
+      locInput.value = loc.suburb.charAt(0) + loc.suburb.slice(1).toLowerCase() + " " + loc.postcode;
+    }
+  }
+
+  function selectAC(loc) {
+    locInput.value = loc.suburb.charAt(0) + loc.suburb.slice(1).toLowerCase() + " " + loc.postcode;
+    locInput.dataset.lat = loc.lat;
+    locInput.dataset.lng = loc.lng;
+    locInput.dataset.suburb = loc.suburb;
+    locInput.dataset.postcode = loc.postcode;
+    hideAC();
+  }
+
+  function hideAC() {
+    acList.style.display = "none";
+    acIndex = -1;
+  }
+
+  // --- Location search ---
+  async function doLocationSearch() {
+    let lat, lng, suburb, postcode;
+    const radius = parseInt(document.getElementById("radius-select").value);
+
+    // Use coordinates set by autocomplete selection if available
+    if (locInput.dataset.lat && locInput.dataset.lng) {
+      lat      = parseFloat(locInput.dataset.lat);
+      lng      = parseFloat(locInput.dataset.lng);
+      suburb   = locInput.dataset.suburb;
+      postcode = locInput.dataset.postcode;
+    } else {
+      // Try to resolve what's typed via the API
+      const q = locInput.value.trim();
+      if (!q) return;
+      try {
+        const r = await fetch("/api/locality/search?q=" + encodeURIComponent(q));
+        const results = await r.json();
+        if (!results.length) {
+          document.getElementById("station-list").innerHTML = '<div class="empty">Suburb or postcode not found. Try a different search.</div>';
+          return;
+        }
+        lat      = results[0].lat;
+        lng      = results[0].lng;
+        suburb   = results[0].suburb;
+        postcode = results[0].postcode;
+      } catch(e) {
+        document.getElementById("station-list").innerHTML = '<div class="empty">Search failed. Please try again.</div>';
+        return;
+      }
+    }
+
+    saveLocationPref(suburb, postcode, lat, lng, radius);
+    await runSearch(lat, lng, radius, suburb, postcode);
+  }
+
+  async function runSearch(lat, lng, radius, suburb, postcode) {
+    const btn = document.getElementById("search-btn");
+    btn.disabled = true;
+    btn.textContent = "Searching…";
+    document.getElementById("station-list").innerHTML = '<div class="empty">Fetching prices…</div>';
+
+    try {
+      const r = await fetch("/api/search", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ lat, lng, radius })
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+
+      searchData = d.results;
+      isSearchMode = true;
+
+      // In search mode — show all suburbs from results, all selected
+      const suburbs = [...new Set(searchData.map(s => s.suburb))];
+      activeSuburbs = new Set(suburbs.map(s => s.toLowerCase()));
+
+      buildSuburbPills(searchData);
+      renderSearchResults(suburb, postcode, radius);
+      document.getElementById("history-card").style.display = "none";
+      document.getElementById("fetch-btn").style.display = "none";
+      document.getElementById("home-btn").style.display = "inline-block";
+
+      const label = suburb.charAt(0) + suburb.slice(1).toLowerCase() + " " + postcode + " · " + radius + "km radius";
+      document.getElementById("search-mode-label").textContent = "Showing: " + label;
+      document.getElementById("search-mode-badge").style.display = "block";
+
+    } catch(e) {
+      document.getElementById("station-list").innerHTML = '<div class="empty">Search failed: ' + e.message + '</div>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Search";
+    }
+  }
+
+  function renderSearchResults(suburb, postcode, radius) {
+    const sort = document.getElementById("sort-select").value;
+    let data = searchData.filter(s =>
+      activeSuburbs.has(s.suburb.toLowerCase()) && activeFuels.has(s.fuel_type)
+    );
+
+    // Summary bar
+    const summaryBar = document.getElementById("summary-bar");
+    summaryBar.innerHTML = "";
+    const activeFuelList = [...activeFuels];
+    activeFuelList.forEach(fuel => {
+      const prices = data.filter(s => s.fuel_type === fuel).map(s => s.price);
+      if (!prices.length) return;
+      const min = Math.min(...prices);
+      const avg = (prices.reduce((a,b)=>a+b,0)/prices.length).toFixed(1);
+      const cfg = FUEL_CONFIG[fuel];
+      if (!cfg) return;
+      const card = document.createElement("div");
+      card.className = "summary-card";
+      card.style.borderTop = "3px solid " + cfg.color;
+      card.innerHTML = '<div class="label">Cheapest ' + cfg.label + '</div>' +
+        '<div class="value">' + min.toFixed(1) + 'c</div>' +
+        '<div class="sub">avg ' + avg + 'c · ' + prices.length + ' stations</div>';
+      summaryBar.appendChild(card);
+    });
+    const stationCount = document.createElement("div");
+    stationCount.className = "summary-card";
+    stationCount.innerHTML = '<div class="label">Stations found</div>' +
+      '<div class="value">' + new Set(data.map(s=>s.station)).size + '</div>' +
+      '<div class="sub">within ' + radius + 'km</div>';
+    summaryBar.appendChild(stationCount);
+
+    if (sort === "price") data.sort((a,b) => a.price - b.price);
+    else if (sort === "suburb") data.sort((a,b) => a.suburb.localeCompare(b.suburb) || a.price - b.price);
+    else data.sort((a,b) => a.station.localeCompare(b.station));
+
+    if (!data.length) {
+      document.getElementById("station-list").innerHTML = '<div class="empty">No stations match current filters.</div>';
+      return;
+    }
+
+    const cheapestPerFuel = {};
+    activeFuelList.forEach(fuel => {
+      const prices = data.filter(s => s.fuel_type === fuel).map(s => s.price);
+      if (prices.length) cheapestPerFuel[fuel] = Math.min(...prices);
+    });
+
+    let html = "";
+    if (sort === "suburb") {
+      const byS = {};
+      data.forEach(s => { if (!byS[s.suburb]) byS[s.suburb] = []; byS[s.suburb].push(s); });
+      Object.entries(byS).forEach(([sub, rows]) => {
+        html += '<div class="suburb-header">' + sub + '</div>';
+        rows.forEach(s => html += stationCard(s, cheapestPerFuel));
+      });
+    } else {
+      data.forEach(s => html += stationCard(s, cheapestPerFuel));
+    }
+    document.getElementById("station-list").innerHTML = html;
+    document.getElementById("last-updated").textContent = "Live search · " + new Date().toLocaleTimeString("en-AU");
+    document.getElementById("footer").textContent = "Live search data from NSW FuelCheck API · Not stored · " + new Date().toLocaleString("en-AU");
+  }
+
+  // --- Home (Newcastle) mode ---
+  function goHome() {
+    isSearchMode = false;
+    searchData   = [];
+    locInput.value = "";
+    delete locInput.dataset.lat;
+    delete locInput.dataset.lng;
+    delete locInput.dataset.suburb;
+    delete locInput.dataset.postcode;
+
+    document.getElementById("history-card").style.display = "block";
+    document.getElementById("fetch-btn").style.display = "inline-block";
+    document.getElementById("home-btn").style.display = "none";
+    document.getElementById("search-mode-badge").style.display = "none";
+
+    // Restore Newcastle suburb selection from cookie
+    const savedSuburbs = getCookie("suburbs");
+    activeSuburbs = savedSuburbs
+      ? new Set(savedSuburbs.split(","))
+      : new Set(DEFAULT_SUBURBS.map(s => s.toLowerCase()));
+
+    loadPrices();
+    loadCrude();
+    loadHistory();
+  }
+
+  // --- Newcastle data loading ---
   async function loadPrices() {
     try {
       const r = await fetch("/api/prices/latest");
@@ -372,9 +665,9 @@
         fetch("/api/prices/history"),
         fetch("/api/crude/history")
       ]);
-      const fuelHistory = await fuelResp.json();
+      const fuelHistory  = await fuelResp.json();
       const crudeHistory = await crudeResp.json();
-      const byFuelDate = {};
+      const byFuelDate   = {};
       fuelHistory.forEach(r => {
         if (!byFuelDate[r.fuel_type]) byFuelDate[r.fuel_type] = {};
         byFuelDate[r.fuel_type][r.date] = r.min_price;
@@ -394,7 +687,7 @@
   function updateChart() {
     if (!window._chartData) return;
     const { byFuelDate, crudeByDate, allDates } = window._chartData;
-    const labels = allDates.map(d => new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}));
+    const labels   = allDates.map(d => new Date(d).toLocaleDateString("en-AU", {day:"numeric", month:"short"}));
     const datasets = [];
     Object.entries(FUEL_CONFIG).forEach(([code, cfg]) => {
       if (!activeFuels.has(code)) return;
@@ -439,7 +732,7 @@
         },
         scales: {
           x: { ticks: { font: { size: 10 }, maxRotation: 45 }, grid: { display: false } },
-          y: { position: "left", title: { display: true, text: "Cents/litre", font: { size: 10 } }, ticks: { font: { size: 10 } }, grid: { color: "rgba(0,0,0,0.05)" } },
+          y: { position: "left",  title: { display: true, text: "Cents/litre",   font: { size: 10 } }, ticks: { font: { size: 10 } }, grid: { color: "rgba(0,0,0,0.05)" } },
           y2: { position: "right", title: { display: true, text: "AUD$/barrel", font: { size: 10 } }, ticks: { font: { size: 10 } }, grid: { display: false } }
         }
       }
@@ -454,12 +747,14 @@
     await loadHistory();
   }
 
+  // --- Newcastle render ---
   function render() {
+    if (isSearchMode) { renderSearchResults("", "", parseInt(document.getElementById("radius-select").value)); return; }
     const sort = document.getElementById("sort-select").value;
     let data = allData.filter(s => activeSuburbs.has(s.suburb.toLowerCase()) && activeFuels.has(s.fuel_type));
 
     const summaryBar = document.getElementById("summary-bar");
-    const crudeCard = document.getElementById("crude-card");
+    const crudeCard  = document.getElementById("crude-card");
     summaryBar.innerHTML = "";
     if (crudeCard) summaryBar.appendChild(crudeCard);
 
@@ -479,7 +774,6 @@
         '<div class="sub">avg ' + avg + 'c · ' + prices.length + ' stations</div>';
       summaryBar.appendChild(card);
     });
-
     const stationCount = document.createElement("div");
     stationCount.className = "summary-card";
     stationCount.innerHTML = '<div class="label">Stations tracked</div>' +
@@ -520,12 +814,11 @@
       document.getElementById("last-updated").textContent = "Updated " + dt;
       document.getElementById("footer").textContent = "Data from NSW FuelCheck API · Brent crude via Yahoo Finance · Fetched " + dt + " · Scheduled 7am & 5pm daily";
     }
-
     document.getElementById("station-list").innerHTML = html;
   }
 
   function stationCard(s, cheapestPerFuel) {
-    const cfg = FUEL_CONFIG[s.fuel_type] || { label: s.fuel_type, color: "#888" };
+    const cfg    = FUEL_CONFIG[s.fuel_type] || { label: s.fuel_type, color: "#888" };
     const isBest = cheapestPerFuel[s.fuel_type] === s.price;
     const chipStyle = "background:" + cfg.color + (isBest ? ";outline:2px solid #22a06b;outline-offset:1px" : "");
     return '<div class="station' + (isBest ? " best" : "") + '">' +
@@ -535,6 +828,7 @@
       '</div>';
   }
 
+  // --- Init ---
   buildFuelButtons();
   loadSettings();
   loadPrices();
