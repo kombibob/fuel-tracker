@@ -149,6 +149,7 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_300','300')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_315','315')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('fuel_types','DL,PDL')")
+    c.execute("""CREATE TABLE IF NOT EXISTS last_alerted_prices (fuel_type TEXT PRIMARY KEY, price REAL NOT NULL, alerted_at TEXT NOT NULL)""")
     conn.commit()
     conn.close()
     log.info("Database initialised at %s", DB_PATH)
@@ -382,15 +383,37 @@ def fetch_and_store():
     t300 = float(get_setting("threshold_300", 300))
     t315 = float(get_setting("threshold_315", 315))
 
+    conn = sqlite3.connect(DB_PATH)
     for fuel, info in cheapest.items():
+        new_price = info["price"]
         label = ALL_FUEL_TYPES.get(fuel, fuel)
-        msg = f"{label} {info['price']:.1f}c — {info['station']}, {info['suburb']}"
-        if info["price"] <= t290 and NTFY_290:
-            send_ntfy_alert(NTFY_290, msg)
-        if info["price"] <= t300 and NTFY_300:
-            send_ntfy_alert(NTFY_300, msg)
-        if info["price"] <= t315 and NTFY_315:
-            send_ntfy_alert(NTFY_315, msg)
+        msg = f"{label} {new_price:.1f}c — {info['station']}, {info['suburb']}"
+
+        # Check last alerted price for this fuel type
+        c = conn.cursor()
+        c.execute("SELECT price FROM last_alerted_prices WHERE fuel_type=?", (fuel,))
+        row = c.fetchone()
+        last_price = row[0] if row else None
+
+        # Only alert if price has changed AND is below threshold
+        price_changed = (last_price is None or new_price != last_price)
+        if price_changed:
+            if new_price <= t290 and NTFY_290:
+                send_ntfy_alert(NTFY_290, msg)
+            if new_price <= t300 and NTFY_300:
+                send_ntfy_alert(NTFY_300, msg)
+            if new_price <= t315 and NTFY_315:
+                send_ntfy_alert(NTFY_315, msg)
+            # Update last alerted price regardless of threshold
+            conn.execute("""INSERT INTO last_alerted_prices (fuel_type, price, alerted_at)
+                VALUES (?,?,?) ON CONFLICT(fuel_type) DO UPDATE SET
+                price=excluded.price, alerted_at=excluded.alerted_at""",
+                (fuel, new_price, datetime.now().isoformat(timespec="seconds")))
+            conn.commit()
+            log.info("Price change detected for %s: %s -> %s", fuel, last_price, new_price)
+        else:
+            log.info("No price change for %s: still %.1fc — no alert sent", fuel, new_price)
+    conn.close()
 
 
 def send_ntfy_alert(url, message):
