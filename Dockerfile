@@ -6,7 +6,8 @@ RUN pip install --no-cache-dir \
     flask \
     requests \
     apscheduler \
-    yfinance
+    yfinance \
+    beautifulsoup4
 
 # Download NSW locality data at build time — stored in /app (not /data volume)
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
