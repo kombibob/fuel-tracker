@@ -253,7 +253,7 @@
   let acResults      = [];      // current autocomplete results
   let acIndex        = -1;      // keyboard selection index
   let acDebounce     = null;
-  window.tgpData = [];
+  let tpgData        = [];
 
   if (!getCookie("cookie_accepted")) {
     document.getElementById("cookie-banner").style.display = "flex";
@@ -564,22 +564,6 @@
       '<div class="value">' + new Set(data.map(s=>s.station)).size + '</div>' +
       '<div class="sub">within ' + radius + 'km</div>';
     summaryBar.appendChild(stationCount);
-    const diesel = window.tgpData.find(x => x.fuel_type === "DL");
-    const u91 = window.tgpData.find(x => x.fuel_type === "U91");
-    if (diesel) {
-      const dlCard = document.createElement("div");
-      dlCard.className = "summary-card";
-      dlCard.style.borderTop = "3px solid #3b6ea5";
-      dlCard.innerHTML = '<div class="label">Wholesale Diesel (TGP)</div><div class="value">' + diesel.price.toFixed(2) + 'c</div><div class="sub">Mobil Newcastle · ' + diesel.date + '</div>';
-      summaryBar.appendChild(dlCard);
-    }
-    if (u91) {
-      const u91Card = document.createElement("div");
-      u91Card.className = "summary-card";
-      u91Card.style.borderTop = "3px solid #1a5cb5";
-      u91Card.innerHTML = '<div class="label">Wholesale ULP (TGP)</div><div class="value">' + u91.price.toFixed(2) + 'c</div><div class="sub">Mobil Newcastle · ' + u91.date + '</div>';
-      summaryBar.appendChild(u91Card);
-    }
 
     if (sort === "price") data.sort((a,b) => a.price - b.price);
     else if (sort === "suburb") data.sort((a,b) => a.suburb.localeCompare(b.suburb) || a.price - b.price);
@@ -666,10 +650,17 @@
   async function loadTGP() {
     try {
       const r = await fetch("/api/tgp/latest");
-      window.tgpData = await r.json();
-    console.log("TGP done, length:", window.tgpData.length);
-      render();
-    } catch(e) { console.error("loadTGP error:", e); }
+      const d = await r.json();
+      if (!d.length) return;
+      const diesel = d.find(x => x.fuel_type === "DL");
+      const u91    = d.find(x => x.fuel_type === "U91");
+      if (diesel) updateSummaryCard("tgp-dl-card", "Wholesale Diesel (TGP)",
+        diesel.price.toFixed(2) + "c",
+        "Mobil Newcastle · " + diesel.date, false);
+      if (u91) updateSummaryCard("tgp-u91-card", "Wholesale ULP (TGP)",
+        u91.price.toFixed(2) + "c",
+        "Mobil Newcastle · " + u91.date, false);
+    } catch(e) {}
   }
 
   function updateSummaryCard(id, label, value, sub, isCrude) {
@@ -835,22 +826,6 @@
       '<div class="value">' + new Set(data.map(s=>s.station)).size + '</div>' +
       '<div class="sub">across ' + activeSuburbs.size + ' suburbs</div>';
     summaryBar.appendChild(stationCount);
-    const diesel = window.tgpData.find(x => x.fuel_type === "DL");
-    const u91 = window.tgpData.find(x => x.fuel_type === "U91");
-    if (diesel) {
-      const dlCard = document.createElement("div");
-      dlCard.className = "summary-card";
-      dlCard.style.borderTop = "3px solid #3b6ea5";
-      dlCard.innerHTML = '<div class="label">Wholesale Diesel (TGP)</div><div class="value">' + diesel.price.toFixed(2) + 'c</div><div class="sub">Mobil Newcastle · ' + diesel.date + '</div>';
-      summaryBar.appendChild(dlCard);
-    }
-    if (u91) {
-      const u91Card = document.createElement("div");
-      u91Card.className = "summary-card";
-      u91Card.style.borderTop = "3px solid #1a5cb5";
-      u91Card.innerHTML = '<div class="label">Wholesale ULP (TGP)</div><div class="value">' + u91.price.toFixed(2) + 'c</div><div class="sub">Mobil Newcastle · ' + u91.date + '</div>';
-      summaryBar.appendChild(u91Card);
-    }
 
     if (sort === "price") data.sort((a,b) => a.price - b.price);
     else if (sort === "suburb") data.sort((a,b) => a.suburb.localeCompare(b.suburb) || a.price - b.price);
@@ -902,13 +877,10 @@
   // --- Init ---
   buildFuelButtons();
   loadSettings();
-  (async () => {
-    await loadTGP();
-    await loadPrices();
-    loadCrude();
-    loadHistory();
-    setTimeout(render, 1000);
-  })();
+  loadPrices();
+  loadCrude();
+  loadHistory();
+  loadTGP();
 </script>
 </body>
 </html>
