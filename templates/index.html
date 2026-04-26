@@ -29,13 +29,14 @@
     .search-mode-badge button { background: none; border: none; cursor: pointer; color: #888; font-size: 12px; padding: 0; line-height: 1; }
     .search-mode-badge button:hover { color: #1a1a1a; }
 
-    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+    .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 1.5rem; }
     .summary-card { background: #fff; border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid #e8e8e4; }
     .summary-card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
     .summary-card .value { font-size: 24px; font-weight: 600; color: #1a1a1a; }
     .summary-card .sub { font-size: 11px; color: #888; margin-top: 2px; }
     .summary-card.crude { border-color: #b8860b; background: #fffdf0; }
     .summary-card.crude .value { color: #7a5c00; }
+    .summary-row-break { grid-column: 1 / -1; height: 0; }
     .chart-card { background: #fff; border-radius: 10px; border: 1px solid #e8e8e4; padding: 1.25rem; margin-bottom: 1.5rem; }
     .chart-card h2 { font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
     .chart-wrap { position: relative; height: 220px; }
@@ -810,10 +811,9 @@
     const summaryBar = document.getElementById("summary-bar");
     const crudeCard  = document.getElementById("crude-card");
     summaryBar.innerHTML = "";
-    if (crudeCard) summaryBar.appendChild(crudeCard);
 
-    const activeFuelList = [...activeFuels];
-    activeFuelList.forEach(fuel => {
+    // --- Row 1: PDL, DL, Stations tracked ---
+    ["PDL","DL"].forEach(fuel => {
       const prices = data.filter(s => s.fuel_type === fuel).map(s => s.price);
       if (!prices.length) return;
       const min = Math.min(...prices);
@@ -834,6 +834,14 @@
       '<div class="value">' + new Set(data.map(s=>s.station)).size + '</div>' +
       '<div class="sub">across ' + activeSuburbs.size + ' suburbs</div>';
     summaryBar.appendChild(stationCount);
+
+    // --- Row break ---
+    const rowBreak = document.createElement("div");
+    rowBreak.className = "summary-row-break";
+    summaryBar.appendChild(rowBreak);
+
+    // --- Row 2: Brent crude, TGP Diesel, TGP ULP ---
+    if (crudeCard) summaryBar.appendChild(crudeCard);
     const diesel = window.tgpData.find(x => x.fuel_type === "DL");
     const u91 = window.tgpData.find(x => x.fuel_type === "U91");
     if (diesel) {
