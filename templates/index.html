@@ -813,6 +813,7 @@
     summaryBar.innerHTML = "";
 
     // --- Row 1: PDL, DL, Stations tracked ---
+    const activeFuelList = [...activeFuels];
     ["PDL","DL"].forEach(fuel => {
       const prices = data.filter(s => s.fuel_type === fuel).map(s => s.price);
       if (!prices.length) return;
