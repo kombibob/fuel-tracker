@@ -9,6 +9,7 @@ from flask import Flask, jsonify, render_template, request, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, date
 import logging
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -150,6 +151,11 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('threshold_315','315')")
     c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES ('fuel_types','DL,PDL')")
     c.execute("""CREATE TABLE IF NOT EXISTS last_alerted_prices (fuel_type TEXT PRIMARY KEY, price REAL NOT NULL, alerted_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS terminal_gate_prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL, location TEXT NOT NULL,
+        fuel_type TEXT NOT NULL, price REAL NOT NULL,
+        UNIQUE(date, location, fuel_type))""")
     conn.commit()
     conn.close()
     log.info("Database initialised at %s", DB_PATH)
@@ -251,6 +257,79 @@ def get_all_prices_for_export():
         LEFT JOIN crude_oil co ON DATE(p.fetched_at) = co.date
         ORDER BY p.fetched_at DESC
     """)
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def fetch_and_store_tgp():
+    """Scrape Mobil terminal gate prices and store Newcastle data."""
+    try:
+        r = requests.get(
+            "https://www.mobil.com.au/en-au/commercial-fuels/terminal-gate",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        table = soup.find("table")
+        if not table:
+            log.warning("TGP: could not find pricing table on Mobil page")
+            return
+        today = date.today().isoformat()
+        fuel_map = {
+            0: "E10", 1: "U91", 2: "P95", 3: "P98", 4: "DL"
+        }
+        records = []
+        for row in table.find_all("tr"):
+            cells = [td.get_text(strip=True) for td in row.find_all(["td","th"])]
+            # Look for the Newcastle row specifically
+            if not cells:
+                continue
+            if "Newcastle" in cells:
+                idx = cells.index("Newcastle")
+                price_cells = cells[idx+1:]
+                for i, fuel_code in fuel_map.items():
+                    try:
+                        val = price_cells[i] if len(price_cells) > i else ""
+                        if val and val != "N/A":
+                            records.append((today, "Newcastle", fuel_code, float(val)))
+                    except (ValueError, IndexError):
+                        continue
+                break
+        if records:
+            conn = sqlite3.connect(DB_PATH)
+            conn.executemany("""INSERT INTO terminal_gate_prices
+                (date, location, fuel_type, price) VALUES (?,?,?,?)
+                ON CONFLICT(date, location, fuel_type) DO UPDATE SET
+                price=excluded.price""", records)
+            conn.commit()
+            conn.close()
+            log.info("TGP: stored %d Newcastle terminal gate prices for %s", len(records), today)
+        else:
+            log.warning("TGP: no Newcastle prices found in table")
+    except Exception as e:
+        log.error("TGP fetch error: %s", e)
+
+
+def get_tgp_history(days=30):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""SELECT date, fuel_type, price FROM terminal_gate_prices
+        WHERE location='Newcastle' AND date >= DATE('now',?)
+        ORDER BY date DESC""", (f"-{days} days",))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_latest_tgp():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""SELECT date, fuel_type, price FROM terminal_gate_prices
+        WHERE location='Newcastle' AND date=(SELECT MAX(date) FROM terminal_gate_prices)
+        ORDER BY fuel_type""")
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
@@ -570,12 +649,20 @@ def api_fetch():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+@app.route("/api/tgp/latest")
+def api_tgp_latest():
+    return jsonify(get_latest_tgp())
+
+@app.route("/api/tgp/history")
+def api_tgp_history():
+    return jsonify(get_tgp_history(30))
 
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(fetch_and_store, "cron", hour="7,17", minute=0)
     scheduler.add_job(fetch_and_store_crude, "cron", hour="7", minute=5)
+    scheduler.add_job(fetch_and_store_tgp, "cron", hour="7", minute=10)
     scheduler.start()
     log.info("Scheduler started — fuel 07:00 & 17:00, crude 07:05 daily")
 
@@ -586,4 +673,5 @@ if __name__ == "__main__":
     start_scheduler()
     fetch_and_store()
     fetch_and_store_crude()
+    fetch_and_store_tgp()
     app.run(host="0.0.0.0", port=5000, debug=False)
