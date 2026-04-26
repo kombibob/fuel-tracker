@@ -668,7 +668,6 @@
       const r = await fetch("/api/tgp/latest");
       window.tgpData = await r.json();
     console.log("TGP done, length:", window.tgpData.length);
-      render();
     } catch(e) { console.error("loadTGP error:", e); }
   }
 
